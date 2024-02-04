@@ -1,13 +1,17 @@
 package com.slightinsight.assist.service;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
+import com.slightinsight.assist.model.KnowledgeBase;
 import com.slightinsight.assist.model.Prompt;
+import com.slightinsight.assist.repository.KnowledgeBaseRepository;
 
 import software.amazon.awssdk.core.SdkBytes;
 import software.amazon.awssdk.services.bedrockruntime.BedrockRuntimeAsyncClient;
@@ -25,6 +29,9 @@ public class AssistantService {
 
     @Autowired
     private BedrockRuntimeClient bedrockClient;
+
+    @Autowired
+    private KnowledgeBaseRepository knowledgeBaseRepository;
 
     @Autowired
     private BedrockRuntimeAsyncClient bedrockAsyncClient;
@@ -99,6 +106,9 @@ public class AssistantService {
         return finalCompletion.get();
     }
 
+    /*
+     * Saving embeddings into database
+     */
     public String saveEmbeddings(Prompt prompt) {
         String payload = new JSONObject().put("inputText", prompt.getQuestion()).toString();
 
@@ -109,7 +119,28 @@ public class AssistantService {
 
         JSONObject responseBody = new JSONObject(response.body().asUtf8String());
 
-        return responseBody.getJSONArray("embedding").toString();
+        List<Double> vectorData = jsonArrayToList(responseBody.getJSONArray("embedding"));
+
+        KnowledgeBase data = new KnowledgeBase();
+        data.setTextData(prompt.getQuestion());
+        data.setVectorData(vectorData);
+
+        knowledgeBaseRepository.save(data);
+
+        return "Embeddings saved to database...!";
+    }
+
+    /*
+     * * Convert JSONArray to List<Double>
+     */
+    private static List<Double> jsonArrayToList(JSONArray jsonArray) {
+        List<Double> list = new ArrayList<Double>();
+
+        for (int i = 0; i < jsonArray.length(); i++) {
+            list.add(jsonArray.getDouble(i));
+        }
+
+        return list;
     }
 
 }
