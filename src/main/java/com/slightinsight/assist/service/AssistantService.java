@@ -4,11 +4,13 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 
+import org.bson.Document;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
+import com.mongodb.client.AggregateIterable;
 import com.slightinsight.assist.model.KnowledgeBase;
 import com.slightinsight.assist.model.Prompt;
 import com.slightinsight.assist.repository.KnowledgeBaseRepository;
@@ -31,10 +33,13 @@ public class AssistantService {
     private BedrockRuntimeClient bedrockClient;
 
     @Autowired
+    private BedrockRuntimeAsyncClient bedrockAsyncClient;
+
+    @Autowired
     private KnowledgeBaseRepository knowledgeBaseRepository;
 
     @Autowired
-    private BedrockRuntimeAsyncClient bedrockAsyncClient;
+    private KnowledgeBaseVectorSearch knowledgeBaseVectorSearch;
 
     public String askAssistant(Prompt prompt) {
         String response = "";
@@ -141,6 +146,62 @@ public class AssistantService {
         }
 
         return list;
+    }
+
+    public String askExpertAssistant(Prompt prompt) {
+
+        /*
+         * Fetch relavent content from vector database
+         * 1. Convert prompt to embeddings
+         */
+        String payload = new JSONObject().put("inputText", prompt.getQuestion()).toString();
+        InvokeModelRequest request = InvokeModelRequest.builder().body(SdkBytes.fromUtf8String(payload)).modelId(TITAN)
+                .contentType("application/json").accept("application/json").build();
+
+        InvokeModelResponse response = bedrockClient.invokeModel(request);
+
+        JSONObject responseBody = new JSONObject(response.body().asUtf8String());
+
+        List<Double> vectorQuery = jsonArrayToList(responseBody.getJSONArray("embedding"));
+
+        /* 2. Query vector database */
+        AggregateIterable<Document> context = knowledgeBaseVectorSearch.findByVectorData(vectorQuery);
+
+        /* 3. Return relevant content */
+        String enclosedPrompt = "Human:\n\n" + prompt.getQuestion();
+        for (Document document : context) {
+            enclosedPrompt = enclosedPrompt + "<context>" + document.getString("text_data") + "</context>\n";
+        }
+        enclosedPrompt = enclosedPrompt + "\n\n Assistant:";
+
+        System.out.println(enclosedPrompt);
+
+        /* 4. Generate response using Context */
+        var finalCompletion = new AtomicReference<>("");
+        var silent = false;
+
+        var queryPayload = new JSONObject().put("prompt", enclosedPrompt).put("temperature", 0.0)
+                .put("max_tokens_to_sample", 200).toString();
+
+        var queryRequest = InvokeModelWithResponseStreamRequest.builder().body(SdkBytes.fromUtf8String(queryPayload))
+                .modelId(CLAUDE).contentType("application/json").accept("application/json").build();
+
+        var visitor = InvokeModelWithResponseStreamResponseHandler.Visitor.builder().onChunk(chunk -> {
+            var json = new JSONObject(chunk.bytes().asUtf8String());
+            var completion = json.getString("completion");
+            finalCompletion.set(finalCompletion.get() + completion);
+            if (!silent) {
+                System.out.print(completion);
+            }
+        }).build();
+
+        var handler = InvokeModelWithResponseStreamResponseHandler.builder()
+                .onEventStream(stream -> stream.subscribe(event -> event.accept(visitor))).onComplete(() -> {
+                }).onError(e -> System.out.println("\n\nError: " + e.getMessage())).build();
+
+        bedrockAsyncClient.invokeModelWithResponseStream(queryRequest, handler).join();
+
+        return finalCompletion.get();
     }
 
 }

@@ -35,4 +35,12 @@ public class AssistantController {
         return new ResponseEntity<String>(response, HttpStatus.OK);
     }
 
+    @GetMapping(value = "/public/knowledgebase/ask")
+    public ResponseEntity<String> askExpertAssistant(@RequestBody Prompt prompt) {
+
+        String response = assistantService.askExpertAssistant(prompt);
+
+        return new ResponseEntity<String>(response, HttpStatus.OK);
+    }
+
 }
